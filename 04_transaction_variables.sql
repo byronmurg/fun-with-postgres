@@ -1,4 +1,4 @@
-BEGIN ;
+SELECT '--- 04 Transaction variables ---' AS title ;
 
 -- Transaction variables are a slighly hacky way of storing information
 -- within the current transaction.
@@ -90,20 +90,18 @@ BEGIN ;
 --		ROLLBACK ;
 
 
--- First lets create a simple type to check that the session key looks
--- remotely valid. This is just to avoid spending too much time on
--- blank session keys.
+SELECT 'First lets create a simple type to check that the session key looks
+		remotely valid. This is just to avoid spending too much time on
+		blank session keys.' AS msg ;
 CREATE DOMAIN session_key AS CHAR(32) CONSTRAINT "Invalid session key" CHECK(LENGTH(VALUE) = 32);
 
-CREATE USER web_interface WITH LOGIN PASSWORD 'This password won''t be used very often' ;
-
--- We also have to create an initial value otherwise an exception will be
--- thrown when we try to access it when unset.
+SELECT 'We also have to create an initial value otherwise an exception will be
+		thrown when we try to access it when unset.' AS msg ;
 ALTER ROLE web_interface SET application.session_key = '' ;
 -- Alternatively you can set this in postgresql.conf
 
 
--- We're going need a session table
+SELECT 'We''re going need a session table.' AS msg ;
 CREATE TABLE core.user_session (
 	  session_key session_key PRIMARY KEY DEFAULT MD5(RANDOM()::TEXT)
 	, user_id INT NOT NULL REFERENCES core.user ON DELETE CASCADE
@@ -111,25 +109,34 @@ CREATE TABLE core.user_session (
 );
 
 
--- Now we need a way of setting the session key.
+SELECT 'Now we need a way of setting the session key.' AS msg ;
 CREATE FUNCTION customer.set_session_key(session_key session_key) RETURNS VOID AS $$
 BEGIN
+	--- Set the session key transaction variable.
 	PERFORM set_config('application.session_key', set_session_key.session_key, TRUE);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER ; 
 
 
+SELECT 'And a way of getting the session key.' AS msg ;
 CREATE FUNCTION core.get_session_key() RETURNS session_key AS $$
+	-- Read the session key from the transaction variable.
 	SELECT NULLIF(current_setting('application.session_key'), '')::session_key ;
 $$ LANGUAGE SQL SECURITY DEFINER ;
 
 
+SELECT 'We''ll also want a function to get the user id easily and
+		stop execution when the session key is invalid. ' AS msg ;
 CREATE FUNCTION core.get_user_id() RETURNS core.user.id%TYPE AS $$
 DECLARE
 	user_id INT := NULL ;
-	session_key session_key := core.get_session_key();
+	my_session_key session_key := core.get_session_key();
 BEGIN
-	IF session_key IS NULL THEN
+	--- Get the user_id from the saved session key
+	--- raising an exception if there is no corresponding
+	--- key in the core.session table.
+
+	IF my_session_key IS NULL THEN
 		RAISE EXCEPTION 'session key not set' ;
 	END IF ;
 
@@ -138,7 +145,7 @@ BEGIN
 	FROM
 		core.user_session s
 	WHERE s.expires > NOW()
-	AND s.session_key = session_key ;
+	AND s.session_key = my_session_key ;
 
 	IF user_id IS NULL THEN
 		RAISE EXCEPTION 'session key is set but invalid.' ;
@@ -149,15 +156,18 @@ END
 $$ LANGUAGE plpgsql STABLE ;
 
 
--- And finally a way to log in
+SELECT 'And finally a way to log in' AS msg ;
 CREATE FUNCTION customer.login(
 	  username core.user.username%TYPE
 	, password TEXT
 ) RETURNS session_key AS $$
 DECLARE
-	session_key session_key ;
+	new_session_key session_key ;
 	user_id INT := NULL ;
 BEGIN 
+	-- Log in and return a session key. Will also set the session key of the
+	-- current transaction. Must commit after calling.
+
 	SELECT
 		  u.id INTO user_id
 	FROM
@@ -170,10 +180,19 @@ BEGIN
 	END IF ;
 
 	INSERT INTO core.user_session (user_id)
-	VALUES (user_id) RETURNING session_key INTO session_key ;
+	VALUES (user_id) RETURNING session_key INTO new_session_key ;
 
-	RETURN session_key ;
+	PERFORM customer.set_session_key(new_session_key);
+
+	RETURN new_session_key ;
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER ;
 
-COMMIT ;
+-- So let's give it a spin.
+SELECT customer.login(username := 'Testy McTesterson', password := 't35Ty !s 1337');
+SELECT core.get_session_key();
+SELECT core.get_user_id();
+
+-- Great! We can now find our user id and check for a login while nested deep
+-- within a query. The only pre-requisite is that we must be inside a
+-- transaction which is generaly a good idea anyway.

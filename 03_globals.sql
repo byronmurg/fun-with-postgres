@@ -1,4 +1,4 @@
-BEGIN ;
+SELECT '--- 03 Globals ---' AS title ;
 
 -- It's great to have a globals table for various settings accross
 -- your database. One of the nice things about postgres is that
@@ -12,6 +12,7 @@ BEGIN ;
 -- If nothing else it can be nice to seperate constants from the
 -- database schema itself.
 
+SELECT 'The global table can just be key -> value.' AS msg ;
 CREATE TABLE core.globals (
 	  key TEXT PRIMARY KEY
 	, value TEXT NOT NULL
@@ -32,4 +33,3 @@ SELECT core.get_global('session duration')::INTERVAL ;
 --     SELECT core.get_global('session duration')::INTERVAL ;
 -- $$ LANGUAGE SQL STABLE SECURITY DEFINER ;
 
-COMMIT ;
